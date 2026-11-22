@@ -1,0 +1,153 @@
+-- KnifePolice Lavender Arena + SFX - INSTANT LOAD (PC/Laptop)
+local env = (getgenv and getgenv()) or _G
+local KEY = "__KNIFEPOLICE_V6_INSTANT"
+
+if env[KEY] and env[KEY].connections then
+	for _, c in ipairs(env[KEY].connections) do pcall(function() c:Disconnect() end) end
+end
+
+local state = { connections = {} }
+env[KEY] = state
+local function keep(c) if c then table.insert(state.connections, c) end end
+
+local write = rawget(env, "writefile") or writefile
+local isfile = rawget(env, "isfile") or isfile
+local custom = rawget(env, "getcustomasset") or getcustomasset or getsynasset
+
+if not (write and custom) then
+	warn("[KnifePolice] writefile/getcustomasset missing")
+	return
+end
+
+local function valid(body, ext)
+	if type(body) ~= "string" then return false end
+	if ext == ".png" then
+		return #body >= 8 and body:sub(1, 8) == "\137PNG\r\n\26\n"
+	end
+	return #body > 40
+end
+
+local function fetch(file, url, ext)
+	local ok, res = pcall(function()
+		if isfile and isfile(file) then
+			local cached = custom(file)
+			if type(cached) == "string" and cached ~= "" then return cached end
+		end
+		
+		local body = game:HttpGet(url)
+		if not valid(body, ext) then error("bad download: " .. file) end
+		write(file, body)
+		local a = custom(file)
+		if type(a) ~= "string" or a == "" then error("custom asset failed: " .. file) end
+		return a
+	end)
+	if not ok then
+		warn("[KnifePolice] " .. tostring(res))
+		return nil
+	end
+	return res
+end
+
+local TARGET = "7658055825"
+local arena = nil
+local sounds = {}
+local watched = setmetatable({}, { __mode = "k" })
+
+local function getid(v)
+	if type(v) ~= "string" then return nil end
+	return v:match("rbxassetid://(%d+)") or v:match("[?&]id=(%d+)") or v:match("(%d+)")
+end
+
+local function applyTexture(obj)
+	if not arena or not obj or not obj.Parent or not obj:IsDescendantOf(workspace) then return end
+	if obj:IsA("Texture") or obj:IsA("Decal") then
+		if getid(obj.Texture) == TARGET then pcall(function() obj.Texture = arena end) end
+	elseif obj:IsA("MeshPart") then
+		if getid(obj.TextureID) == TARGET then pcall(function() obj.TextureID = arena end) end
+	end
+end
+
+local function patchSound(obj)
+	if not obj or not obj.Parent or not obj:IsA("Sound") then return end
+	local r = sounds[getid(obj.SoundId)]
+	if r then pcall(function() obj.SoundId = r end) end
+
+	if not watched[obj] then
+		watched[obj] = true
+		local ok, c = pcall(function()
+			return obj:GetPropertyChangedSignal("SoundId"):Connect(function()
+				local rep = sounds[getid(obj.SoundId)]
+				if rep and obj.Parent then
+					pcall(function() obj.SoundId = rep end)
+				end
+			end)
+		end)
+		if ok and c then keep(c) end
+	end
+end
+
+-- Download & apply arena texture immediately
+task.spawn(function()
+	arena = fetch(
+		"knifepolice_lavender_arena.png",
+		"https://githubusercontent.com",
+		".png"
+	)
+	if arena then
+		for _, obj in ipairs(workspace:GetDescendants()) do
+			applyTexture(obj)
+		end
+	end
+end)
+
+-- Download all SFX in parallel and apply as each finishes
+local soundList = {
+	{ name = "loadin", url = "https://catbox.moe", ids = {6384899588}, ext = ".mp3" },
+	{ name = "kill", url = "https://catbox.moe", ids = {16530229616, 16530229541, 16530229695}, ext = ".mp3" },
+	{ name = "doublejump", url = "https://catbox.moe", ids = {16770456156}, ext = ".wav" },
+	{ name = "weaponswitch", url = "https://catbox.moe", ids = {13158734943, 13158735106, 13158735037}, ext = ".mp3" },
+	{ name = "click", url = "https://catbox.moe", ids = {177266782}, ext = ".mp3" },
+	{ name = "roundloss", url = "https://catbox.moe", ids = {17016581922}, ext = ".mp3" },
+	{ name = "matchpoint", url = "https://catbox.moe", ids = {17026600996}, ext = ".mp3" },
+	{ name = "suddendeath", url = "https://catbox.moe", ids = {17467242617}, ext = ".mp3" },
+	{ name = "lobby", url = "https://catbox.moe", ids = {17697682466, 17733314783, 120824068504773, 114306049661290}, ext = ".mp3" },
+	{ name = "roundwin", url = "https://catbox.moe", ids = {16810041280}, ext = ".mp3" },
+	{ name = "wintheme", url = "https://catbox.moe", ids = {18221725850, 18239670056, 18221726246}, ext = ".mp3" },
+	{ name = "matchmaking", url = "https://catbox.moe", ids = {18525513345}, ext = ".mp3" },
+	{ name = "slide", url = "https://github.com", ids = {16737738420}, ext = ".wav" }
+}
+
+for _, s in ipairs(soundList) do
+	task.spawn(function()
+		local a = fetch("kp_" .. s.name .. s.ext, s.url, s.ext)
+		if a then
+			for _, id in ipairs(s.ids) do
+				sounds[tostring(id)] = a
+			end
+			for _, obj in ipairs(game:GetDescendants()) do
+				patchSound(obj)
+			end
+		end
+	end)
+end
+
+-- Instant listener for new objects
+keep(game.DescendantAdded:Connect(function(obj)
+	if env[KEY] ~= state then return end
+	applyTexture(obj)
+	patchSound(obj)
+
+	if obj:IsA("MeshPart") or obj:IsA("Texture") or obj:IsA("Decal") then
+		obj:GetPropertyChangedSignal(obj:IsA("MeshPart") and "TextureID" or "Texture"):Connect(function()
+			if env[KEY] == state then applyTexture(obj) end
+		end)
+	end
+end))
+
+pcall(function()
+	game:GetService("StarterGui"):SetCore("SendNotification", {
+		Title = "KnifePolice Instant",
+		Text = "Lavender arena + SFX active",
+		Duration = 4
+	})
+end)
